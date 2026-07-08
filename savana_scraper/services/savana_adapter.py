@@ -25,6 +25,7 @@ from savana_scraper.models import Product, ProductRef
 from savana_scraper.services.adapter import EcommerceAdapter
 from savana_scraper.services.extractor import Extractor
 from savana_scraper.services.savana_ssr import SavanaSsrStrategy
+from savana_scraper.services.taxonomy import SavanaTaxonomy
 
 log = get_logger(__name__)
 
@@ -37,9 +38,12 @@ class SavanaAdapter(EcommerceAdapter):
     def __init__(self, settings: Settings, browser: BrowserManager) -> None:
         self._settings = settings
         self._browser = browser
+        # Shared with the caller so a run can report every category id it could
+        # not name, once, instead of per product.
+        self.taxonomy = SavanaTaxonomy.load(settings.taxonomy_path)
         # Savana's SSR JSON is the highest-fidelity structured source; it runs
         # ahead of the generic JSON-LD/DOM/OG strategies.
-        self._extractor = Extractor(settings, extra_strategies=[SavanaSsrStrategy()])
+        self._extractor = Extractor(settings, extra_strategies=[SavanaSsrStrategy(self.taxonomy)])
 
     # --------------------------------------------------------------------- #
     # Discovery
@@ -134,6 +138,8 @@ class SavanaAdapter(EcommerceAdapter):
                 product_url=url,
                 mrp=fields.mrp,
                 asp=fields.asp,
+                category=fields.category,
+                subcategory=fields.subcategory,
             )
         except ValueError as e:
             raise ExtractionError(f"Invalid product data for {url}: {e}") from e

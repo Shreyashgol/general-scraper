@@ -17,6 +17,7 @@ import pytest
 
 from savana_scraper.core.config import load_settings
 from savana_scraper.core.exceptions import NavigationError
+from savana_scraper.models import Product
 from savana_scraper.services.generic_source import GenericProductSource
 
 PRODUCT_PAGE = """<!doctype html><html><body>
@@ -86,6 +87,46 @@ def build_numbered_site(root: Path) -> None:
     """)
 
 
+BREADCRUMB_PRODUCT_PAGE = """<!doctype html><html><body>
+  <nav aria-label="Breadcrumb">
+    <ol>
+      <li><a href="/">Home</a></li>
+      <li><a href="/women">Women</a></li>
+      <li><a href="/women/bags">{subcategory}</a></li>
+      <li><span>{name}</span></li>
+    </ol>
+  </nav>
+  <h1>{name}</h1>
+  <img src="/static/{n}.jpg" width="600" height="800">
+  <div class="product-main"><p class="price">£{price}.00</p></div>
+</body></html>
+"""
+
+
+def build_breadcrumb_site(root: Path) -> None:
+    """A storefront that publishes a breadcrumb trail on every product page.
+
+    Products alternate between two subcategories under one category, so a run
+    that merely echoed the listing's own name would visibly collapse them.
+    """
+    products = root / "p"
+    products.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 5):
+        (products / f"item-{n}.html").write_text(
+            BREADCRUMB_PRODUCT_PAGE.format(
+                name=f"Item {n}",
+                n=n,
+                price=10 + n,
+                subcategory="Backpacks" if n % 2 else "Tote Bags",
+            )
+        )
+    (root / "index.html").write_text(f"""<!doctype html><html><body>
+      <h1>Shop</h1>
+      <div id="grid">{_links(1, 4)}</div>
+    </body></html>
+    """)
+
+
 def build_decoy_site(root: Path) -> None:
     """A product literally named "2" must not be mistaken for a pagination link."""
     _product_files(root, 3)
@@ -125,18 +166,23 @@ def serve(tmp_path: Path) -> Iterator[object]:
         server.shutdown()
 
 
-async def _crawl(seed: str) -> tuple[GenericProductSource, list[str]]:
+async def _crawl_products(seed: str) -> tuple[GenericProductSource, list[Product]]:
     settings = load_settings()
     settings.request_delay_s = 0.0
     settings.scroll_pause_s = 0.1
     source = GenericProductSource(settings)
     try:
-        products = [p.name async for p in source.stream(seed)]
+        products = [p async for p in source.stream(seed)]
     except Exception as e:  # noqa: BLE001 - no browser binary in a bare environment
         if "executable doesn't exist" in str(e).lower():
             pytest.skip("Chromium not installed for Playwright")
         raise
     return source, products
+
+
+async def _crawl(seed: str) -> tuple[GenericProductSource, list[str]]:
+    source, products = await _crawl_products(seed)
+    return source, [p.name for p in products]
 
 
 async def test_load_more_button_reveals_the_rest(serve) -> None:  # type: ignore[no-untyped-def]
@@ -164,6 +210,26 @@ async def test_decoys_do_not_derail_the_crawl(serve) -> None:  # type: ignore[no
     source, names = await _crawl(f"{base}/index.html")
 
     assert sorted(names) == ["Item 1", "Item 2", "Item 3"]
+
+
+async def test_breadcrumbs_become_category_and_subcategory(serve) -> None:  # type: ignore[no-untyped-def]
+    """On an unknown storefront, the breadcrumb trail is the taxonomy.
+
+    `Home > Women > Backpacks > Item 1` must yield ("Women", "Backpacks") — the
+    root dropped, the product's own name never mistaken for a subcategory.
+    """
+    base = serve(build_breadcrumb_site)
+    source, products = await _crawl_products(f"{base}/index.html")
+
+    by_name = {p.name: p for p in products}
+    assert sorted(by_name) == [f"Item {n}" for n in range(1, 5)]
+
+    assert {p.category for p in products} == {"Women"}
+    assert by_name["Item 1"].subcategory == "Backpacks"
+    assert by_name["Item 2"].subcategory == "Tote Bags"
+    # The trailing crumb is the product; it must never leak into a column.
+    assert all(p.subcategory != p.name for p in products)
+    assert source.warnings == []
 
 
 async def test_unreachable_seed_raises_rather_than_yielding_nothing() -> None:

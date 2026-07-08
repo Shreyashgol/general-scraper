@@ -10,3 +10,4 @@ storage/state/*.json
 *.egg-info/
 build/
 dist/
+outputs/

@@ -12,6 +12,11 @@ Field mapping (per the PRD):
     * salesPrice   → MRP         (the value the site labels "MRP")
     * promotePrice → ASP         (the discounted selling price; falls back to
                                   salesPrice when there is no active promotion)
+    * level2CatId  → category    (via :mod:`savana_scraper.services.taxonomy`)
+    * level3CatId  → subcategory
+
+The category ids appear *only here*, never in the listing API — which is why the
+fast path has to visit product pages to fill those two columns.
 
 This is the highest-priority strategy for :class:`SavanaAdapter`.
 """
@@ -27,6 +32,7 @@ from bs4 import BeautifulSoup
 from savana_scraper.core.logging import get_logger
 from savana_scraper.services.extractor import FieldSet
 from savana_scraper.services.pricing import parse_price
+from savana_scraper.services.taxonomy import SavanaTaxonomy
 
 log = get_logger(__name__)
 
@@ -34,8 +40,35 @@ log = get_logger(__name__)
 DETAIL_KEY = '"/n/api/trade/intention/item/detail"'
 
 
+def locate_detail(html: str) -> dict[str, Any] | None:
+    """The product-detail object embedded in ``html``, or ``None``.
+
+    Module-level because the API source needs it too: the category ids live in
+    this blob and nowhere else, so the fast path must parse product pages to
+    reach them.
+    """
+    idx = html.find(DETAIL_KEY)
+    if idx == -1:
+        return None
+    brace = html.find("{", idx + len(DETAIL_KEY))
+    if brace == -1:
+        return None
+    blob = _balanced_object(html, brace)
+    if blob is None:
+        return None
+    try:
+        data = json.loads(blob)
+    except (json.JSONDecodeError, ValueError) as e:
+        log.debug("Savana SSR detail JSON parse failed: %s", e)
+        return None
+    return data if isinstance(data, dict) and "goodsId" in data else None
+
+
 class SavanaSsrStrategy:
     """Parse the embedded product-detail JSON from the rendered HTML."""
+
+    def __init__(self, taxonomy: SavanaTaxonomy | None = None) -> None:
+        self._taxonomy = taxonomy or SavanaTaxonomy()
 
     def parse(self, soup: BeautifulSoup, html: str, page_url: str) -> FieldSet:
         result = FieldSet()
@@ -45,6 +78,10 @@ class SavanaSsrStrategy:
 
         result.name = _clean(detail.get("goodsName") or detail.get("shortGoodsName"))
         result.image_url = self._image(detail, page_url)
+        # level1 is the storefront itself and level4 is finer than any shopper's
+        # mental model; levels 2 and 3 are the useful pair.
+        result.category = self._taxonomy.category(detail.get("level2CatId"))
+        result.subcategory = self._taxonomy.subcategory(detail.get("level3CatId"))
 
         sales = parse_price(detail.get("salesPrice"))
         promote = parse_price(detail.get("promotePrice"))
@@ -58,21 +95,7 @@ class SavanaSsrStrategy:
 
     # ------------------------------------------------------------------ #
     def _locate_detail(self, html: str) -> dict[str, Any] | None:
-        idx = html.find(DETAIL_KEY)
-        if idx == -1:
-            return None
-        brace = html.find("{", idx + len(DETAIL_KEY))
-        if brace == -1:
-            return None
-        blob = _balanced_object(html, brace)
-        if blob is None:
-            return None
-        try:
-            data = json.loads(blob)
-        except (json.JSONDecodeError, ValueError) as e:
-            log.debug("Savana SSR detail JSON parse failed: %s", e)
-            return None
-        return data if isinstance(data, dict) and "goodsId" in data else None
+        return locate_detail(html)
 
     @staticmethod
     def _image(detail: dict[str, Any], page_url: str) -> str | None:

@@ -24,6 +24,13 @@ from bs4 import BeautifulSoup
 
 from savana_scraper.core.config import Settings
 from savana_scraper.core.logging import get_logger
+from savana_scraper.services.breadcrumbs import (
+    category_pair,
+    crumbs_from_category_value,
+    crumbs_from_dom,
+    crumbs_from_json_ld,
+    crumbs_from_schema_category,
+)
 from savana_scraper.services.page_signals import product_prices
 from savana_scraper.services.pricing import parse_price
 
@@ -38,6 +45,8 @@ class FieldSet:
     image_url: str | None = None
     mrp: Decimal | None = None
     asp: Decimal | None = None
+    category: str | None = None
+    subcategory: str | None = None
 
     def merge_gaps_from(self, other: FieldSet) -> None:
         """Fill only this set's empty fields from ``other`` (in place)."""
@@ -129,6 +138,40 @@ class StructuredDataStrategy:
         result.mrp = result.mrp or parse_price(
             product.get("mrp") or product.get("listPrice") or product.get("highPrice")
         )
+
+        # schema.org/Product.category is a path: "Women > Bags > Backpacks".
+        if result.category is None:
+            crumbs = crumbs_from_category_value(product.get("category"))
+            result.category, result.subcategory = category_pair(crumbs, result.name)
+
+
+# --------------------------------------------------------------------------- #
+# Strategy 1b: breadcrumbs (category / subcategory)
+# --------------------------------------------------------------------------- #
+class BreadcrumbStrategy:
+    """Derive category and subcategory from the page's breadcrumb trail.
+
+    Fills nothing else. Ordered after :class:`StructuredDataStrategy` so an
+    explicit ``Product.category`` wins over a navigational trail, which sometimes
+    reflects the path the user browsed rather than where the product lives.
+    """
+
+    def parse(self, soup: BeautifulSoup, html: str, page_url: str) -> FieldSet:
+        result = FieldSet()
+        crumbs = (
+            crumbs_from_json_ld(soup) or crumbs_from_schema_category(soup) or crumbs_from_dom(soup)
+        )
+        if crumbs:
+            # The trailing crumb is usually the product itself; the page's own
+            # title is how we recognise it without seeing the merged FieldSet.
+            result.category, result.subcategory = category_pair(crumbs, _page_title(soup))
+        return result
+
+
+def _page_title(soup: BeautifulSoup) -> str | None:
+    """The product's display name, as this page states it."""
+    heading = _clean(_select_text(soup, "h1"))
+    return heading or _meta(soup, "og:title")
 
 
 # --------------------------------------------------------------------------- #
@@ -264,6 +307,7 @@ class Extractor:
         self._strategies: list[ExtractionStrategy] = strategies or [
             *(extra_strategies or []),
             StructuredDataStrategy(),
+            BreadcrumbStrategy(),
             DomStrategy(settings),
             FallbackStrategy(),
         ]

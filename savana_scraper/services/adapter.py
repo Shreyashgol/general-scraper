@@ -44,6 +44,8 @@ class ProductSource(ABC):
 
     def __init__(self) -> None:
         self.stats = SourceStats()
+        #: Run-level notes for the report — what was inferred, or could not be.
+        self.warnings: list[str] = []
 
     @abstractmethod
     def stream(self, seed_url: str, skip: SkipPredicate | None = None) -> AsyncIterator[Product]:

@@ -212,6 +212,8 @@ function Preview({ rows, total }) {
             <tr>
               <th>Image</th>
               <th>Name</th>
+              <th>Category</th>
+              <th>Subcategory</th>
               <th>MRP</th>
               <th>ASP</th>
               <th>Link</th>
@@ -224,6 +226,8 @@ function Preview({ rows, total }) {
                   <img src={row.image_url} alt="" loading="lazy" />
                 </td>
                 <td>{row.name}</td>
+                <td>{row.category || '—'}</td>
+                <td>{row.subcategory || '—'}</td>
                 <td className="num">{row.mrp || '—'}</td>
                 <td className="num">{row.asp || '—'}</td>
                 <td>

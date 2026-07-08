@@ -67,6 +67,14 @@ class ApiConfig(BaseSettings):
     # Safety valve on pagination depth per listing (0 = unlimited).
     max_pages_per_listing: int = 0
 
+    # --- Category enrichment --------------------------------------------------
+    # The listing API carries no category, so filling the category/subcategory
+    # columns costs one product-page fetch each. Turn this off to restore the
+    # ~50 products/sec listing-only path and export those two columns empty.
+    fetch_categories: bool = True
+    # Product pages fetched in parallel while enriching. Bounded to stay polite.
+    detail_concurrency: int = 4
+
 
 class Settings(BaseSettings):
     """Top-level runtime settings."""
@@ -129,6 +137,11 @@ class Settings(BaseSettings):
 
     # --- Logging --------------------------------------------------------------
     log_level: str = "INFO"
+
+    # --- Taxonomy -------------------------------------------------------------
+    # Optional JSON file overriding/extending the savana category id → name map
+    # (see services/taxonomy.py). Unmapped ids export as "cat:<id>".
+    taxonomy_path: Path | None = None
 
     # --- Selectors ------------------------------------------------------------
     selectors: SelectorConfig = Field(default_factory=SelectorConfig)

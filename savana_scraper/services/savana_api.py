@@ -36,6 +36,8 @@ from savana_scraper.core.exceptions import ApiError
 from savana_scraper.core.logging import get_logger
 from savana_scraper.models import Product
 from savana_scraper.services.pricing import parse_price
+from savana_scraper.services.savana_ssr import locate_detail
+from savana_scraper.services.taxonomy import SavanaTaxonomy
 
 log = get_logger(__name__)
 
@@ -268,6 +270,85 @@ class SavanaApiClient:
         if not isinstance(payload, dict):
             raise ApiError(f"goods-flow payload missing 'data' for flow {flow_id}")
         return payload
+
+
+class SavanaCategoryEnricher:
+    """Fills ``category``/``subcategory`` by reading each product's detail page.
+
+    The listing API returns 40 products per request but no taxonomy: a goods
+    record's only category-shaped field, ``itemTrack``, carries the *activity* id
+    (a merchandising flow such as "Everyday bags"), not the catalogue category.
+    The real ids — ``level2CatId``, ``level3CatId`` — appear solely in the
+    product page's SSR blob, so two extra columns cost one page load per product.
+
+    That is the whole trade: ~50 products/sec becomes a few per second. Set
+    ``SAVANA_API_FETCH_CATEGORIES=false`` to keep the speed and lose the columns.
+
+    A page that fails to load or parse leaves the product's categories empty and
+    is counted, not raised — one unreachable detail page must not lose a product
+    whose name, image and prices the listing API already gave us in full.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        taxonomy: SavanaTaxonomy,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._settings = settings
+        self._taxonomy = taxonomy
+        self._transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._semaphore = asyncio.Semaphore(max(1, settings.api.detail_concurrency))
+        #: Products whose detail page could not be read.
+        self.misses = 0
+
+    async def __aenter__(self) -> SavanaCategoryEnricher:
+        self._client = httpx.AsyncClient(
+            timeout=self._settings.api.timeout_s,
+            headers={"user-agent": self._settings.user_agent},
+            follow_redirects=True,
+            transport=self._transport,
+        )
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def enrich(self, products: list[Product]) -> list[Product]:
+        """Return ``products`` with categories filled, preserving order."""
+        if not products:
+            return []
+        return list(await asyncio.gather(*(self._enrich_one(p) for p in products)))
+
+    async def _enrich_one(self, product: Product) -> Product:
+        async with self._semaphore:
+            detail = await self._detail_for(str(product.product_url))
+            if self._settings.api.delay_s > 0:
+                await asyncio.sleep(self._settings.api.delay_s)
+
+        if detail is None:
+            self.misses += 1
+            return product
+        return product.model_copy(
+            update={
+                "category": self._taxonomy.category(detail.get("level2CatId")),
+                "subcategory": self._taxonomy.subcategory(detail.get("level3CatId")),
+            }
+        )
+
+    async def _detail_for(self, url: str) -> dict[str, Any] | None:
+        if self._client is None:
+            raise ApiError("Enricher not started; use 'async with SavanaCategoryEnricher(...)'")
+        try:
+            response = await self._client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            log.debug("Category lookup failed for %s: %s", url, e)
+            return None
+        return locate_detail(response.text)
 
 
 def _seed_first(seed_url: str, flow_ids: list[str]) -> list[str]:

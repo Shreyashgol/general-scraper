@@ -3,8 +3,8 @@
 Paste a product or listing URL; get a CSV of every product. Ships a CLI, a FastAPI
 backend, and a React SPA over one scraping engine.
 
-Extracted fields: **Product Name**, **Image URL**, **MRP**, **ASP** (selling price),
-**Product Link**.
+Extracted fields: **Product Name**, **Category**, **Subcategory**, **Image URL**,
+**MRP**, **ASP** (selling price), **Product Link**.
 
 ## How general is it, really
 
@@ -20,7 +20,7 @@ So the platform keeps a **registry of site adapters** and falls back to a
 | | Registered domain (e.g. `savana.com`) | Any other domain |
 | --- | --- | --- |
 | Discovery | The site's own JSON API | Cluster links by URL shape, then *verify* by sampling |
-| Speed | ~50 products/sec | ~1 product/sec (renders each page) |
+| Speed | ~50 products/sec, or a few with categories ([why](#the-cost-stated-plainly)) | ~1 product/sec (renders each page) |
 | Confidence | Exact | Best effort — reported in the run's warnings |
 
 Adding a site = one entry in `services/registry.py`. Nothing else changes.
@@ -69,6 +69,71 @@ category names as products with the grid's max/min as MRP/ASP: believable, and
 wrong. When nothing verifies, the run reports *no products found* plus the patterns
 it tried — it fails loudly rather than returning plausible garbage.
 
+## Category and subcategory
+
+Both columns are *read*, never inferred. A product named "Slit Bodycon Dress" is
+not filed under Dresses on the strength of its name — a title is a marketing
+string, not a taxonomy, and "Backless Freedom Bra" would sort itself into
+Freedom. When a site publishes no taxonomy the columns stay empty, which is a
+fact; a guess would be a fact-shaped mistake.
+
+**On an unknown site** the trail is the taxonomy: `BreadcrumbList` JSON-LD, then a
+`schema.org/Product.category` path, then a breadcrumb `<nav>`. Reduced by one rule
+— drop the root, drop the trailing product name, take the next two:
+
+```
+Home  >  Women  >  Bags  >  Backpacks  >  Kitty School Backpack
+~~~~     ~~~~~     ~~~~     ~~~~~~~~~     ~~~~~~~~~~~~~~~~~~~~~
+drop     category  subcat    ignored      dropped (it is the product)
+```
+
+Taking the *two most specific* crumbs instead would answer `("Women", "Bags")` on
+a three-crumb site and `("Bags", "Backpacks")` on a four-crumb one — the same
+column meaning a different depth per row.
+
+**On savana.com** neither exists. The product page's SSR payload carries a real
+four-level taxonomy, but as bare integers:
+
+```
+level1  2    the storefront itself — constant, carries nothing
+level2  11   → category      Bags
+level3  57   → subcategory   Backpacks
+level4  341  finer than any shopper's mental model
+```
+
+Nothing on the site resolves those ids. `flowType: "CATEGORY"` is a legal
+goods-flow type yet answers `QUERY Category info error` for every id, and no other
+endpoint returns a name. So `services/taxonomy.py` holds the map, and its names
+were read off savana's own labels rather than invented: products were sampled from
+each homepage category tile, and each id named by the tile it appeared under
+(`level2 750` only ever under "Denim") or by the noun its products share (`level3
+57` is "Kitty School Backpack", "Solid School Backpack", …).
+
+An unmapped id exports as `cat:<id>` and the run reports it. A new savana category
+therefore shows up as an obvious gap rather than a plausible wrong label. Extend
+the map without touching code via `SAVANA_TAXONOMY_PATH`:
+
+```json
+{"level2": {"999": "Footwear"}, "level3": {"1000": "Sneakers"}}
+```
+
+### The cost, stated plainly
+
+The category ids live *only* on the product page. The listing API returns 40
+products per request and no taxonomy at all — a goods record's one
+category-shaped field, `itemTrack`, holds the *activity* id ("Everyday bags"), a
+merchandising flow rather than a catalogue category. So these two columns cost one
+page load per product, and the `api` source drops from ~50 products/sec to a few.
+
+That buys a distinction the cheap route cannot express: the single listing
+"Everyday bags" contains both `57` Backpacks and `54` Tote Bags. Labelling every
+product with its listing's title would flatten them into one wrong answer.
+
+Keep the speed and lose the columns with `SAVANA_API_FETCH_CATEGORIES=false`. A
+product page that fails to load leaves its categories empty and is counted in the
+run's warnings — one dead page never discards a product the listing API already
+described in full.
+
 ## robots.txt
 
 The CLI scrapes what its operator chose. The web platform scrapes whatever a user
@@ -98,13 +163,16 @@ CLI (cli.py)                        └─ JobStore (web/jobs.py, async jobs)
          ├─ Validator                  services/validator.py
          ├─ CsvExporter (atomic)       services/exporter.py
          └─ RunState (resume)          storage/state.py
-  Shared: Extractor + page_signals, BrowserManager, robots, retry, config, logging
+  Shared: Extractor + page_signals + breadcrumbs, taxonomy, BrowserManager,
+          robots, retry, config, logging
 ```
 
 Extraction priority: **1. structured data** (JSON-LD / `schema.org/Product`) →
-**2. DOM selectors** → **3. heuristics + Open-Graph fallback**. Each strategy fills
-only the gaps left by the previous one. The generic crawler deliberately *excludes*
-the Savana-tuned DOM selectors from its chain.
+**1b. breadcrumbs** (category / subcategory) → **2. DOM selectors** →
+**3. heuristics + Open-Graph fallback**. Each strategy fills only the gaps left by
+the previous one. The generic crawler deliberately *excludes* the Savana-tuned DOM
+selectors from its chain, but keeps the breadcrumb reader — breadcrumbs are a
+convention, not a site quirk.
 
 ## Setup
 
@@ -141,11 +209,15 @@ trade for a single-user tool. Moving to Redis/Celery means reimplementing
 
 ```bash
 # Crawl the whole site (default): harvests every listing linked from the seed
-# and drains each one. ~1200 products in ~25s.
+# and drains each one.
 python -m savana_scraper scrape
 
 # Cap the run, choose an output dir
 python -m savana_scraper scrape -n 1000 -o ./outputs
+
+# Skip the per-product category lookup: ~1200 products in ~25s, with the
+# category/subcategory columns left empty.
+SAVANA_API_FETCH_CATEGORIES=false python -m savana_scraper scrape
 
 # One listing only
 python -m savana_scraper scrape "https://www.savana.com/activity/13070" --no-crawl
@@ -164,9 +236,12 @@ Output: `outputs/savana_products_<timestamp>.csv`.
 | `--source` | How it works | Speed |
 | --- | --- | --- |
 | `auto` (default) | Registry lookup on the URL's domain, else `generic` | — |
-| `api` | Savana's `goods-flow/pageList` JSON, which already carries every CSV field | ~50 products/sec |
+| `api` | Savana's `goods-flow/pageList` JSON, plus one product page per item for its category ids | a few products/sec; ~50/sec with `SAVANA_API_FETCH_CATEGORIES=false` |
 | `browser` | Renders the Savana listing with Playwright, then every product page | ~1 product/sec |
 | `generic` | Any site: cluster links, verify by sampling, extract each page | ~1 product/sec |
+
+`browser` gets category and subcategory for free — it already loads every product
+page, which is the only place savana's category ids appear.
 
 `api` and `browser` produce identical `name`/`mrp`/`asp` values — the API mapping
 (`salePrice` → MRP, `promotePrice` → ASP) is the same one the product page's SSR
@@ -190,6 +265,9 @@ see `savana_scraper/core/config.py`. Common knobs:
 | `SAVANA_MAX_SCROLLS` | Lazy-load scroll iterations | `30` |
 | `SAVANA_REQUEST_DELAY_S` | Politeness delay between pages | `1.0` |
 | `SAVANA_MAX_RETRIES` | Retry attempts per product | `3` |
+| `SAVANA_API_FETCH_CATEGORIES` | Fetch each product page for its category ids | `true` |
+| `SAVANA_API_DETAIL_CONCURRENCY` | Product pages fetched in parallel when enriching | `4` |
+| `SAVANA_TAXONOMY_PATH` | JSON file extending the category id → name map | unset |
 | `SAVANA_SEL_PRODUCT_LINK` | Discovery link selector | see config |
 | `SAVANA_SEL_NAME` / `_IMAGE` / `_MRP` / `_ASP` | DOM extraction selectors | see config |
 

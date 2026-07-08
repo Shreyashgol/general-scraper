@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from typing import Any
 
 from savana_scraper.core.browser import BrowserManager
@@ -25,10 +26,12 @@ from savana_scraper.services.adapter import ProductSource, SkipPredicate
 from savana_scraper.services.savana_adapter import SavanaAdapter
 from savana_scraper.services.savana_api import (
     SavanaApiClient,
+    SavanaCategoryEnricher,
     flow_id_from_url,
     goods_to_product,
     product_url_for,
 )
+from savana_scraper.services.taxonomy import SavanaTaxonomy
 
 log = get_logger(__name__)
 
@@ -47,8 +50,24 @@ class ApiProductSource(ProductSource):
     ) -> AsyncIterator[Product]:
         settings = self._settings
         seen_goods: set[int] = set()
+        taxonomy = SavanaTaxonomy.load(settings.taxonomy_path)
 
-        async with SavanaApiClient(settings) as client:
+        async with AsyncExitStack() as stack:
+            client = await stack.enter_async_context(SavanaApiClient(settings))
+            # Products stream out one at a time, but their category pages are
+            # fetched a batch at a time — so the enrichment's latency overlaps
+            # instead of stacking up one product-page round-trip per product.
+            enricher: SavanaCategoryEnricher | None = None
+            if settings.api.fetch_categories:
+                enricher = await stack.enter_async_context(
+                    SavanaCategoryEnricher(settings, taxonomy)
+                )
+                log.info(
+                    "Filling category/subcategory from product pages "
+                    "(SAVANA_API_FETCH_CATEGORIES=false to skip and stay fast)"
+                )
+            batch_size = max(1, settings.api.detail_concurrency)
+
             listings = await self._listings_for(client, seed_url)
             for index, listing_url in enumerate(listings, start=1):
                 flow_id = flow_id_from_url(listing_url)
@@ -57,15 +76,45 @@ class ApiProductSource(ProductSource):
                     continue
 
                 log.info("[bold]Listing %d/%d[/] %s", index, len(listings), listing_url)
+                batch: list[Product] = []
                 try:
                     async for goods in client.iter_goods(flow_id):
                         product = self._to_product(goods, seen_goods, skip)
-                        if product is not None:
+                        if product is None:
+                            continue
+                        if enricher is None:
                             yield product
+                            continue
+
+                        batch.append(product)
+                        if len(batch) >= batch_size:
+                            for enriched in await enricher.enrich(batch):
+                                yield enriched
+                            batch.clear()
+                            self._refresh_warnings(taxonomy, enricher)
                 except ApiError as e:
                     # One bad listing must not abort a multi-listing crawl.
                     self.stats.failed += 1
                     log.error("Listing %s failed: %s", listing_url, e)
+
+                if enricher is not None and batch:
+                    for enriched in await enricher.enrich(batch):
+                        yield enriched
+                    self._refresh_warnings(taxonomy, enricher)
+
+    def _refresh_warnings(self, taxonomy: SavanaTaxonomy, enricher: SavanaCategoryEnricher) -> None:
+        """Recompute run warnings after every batch.
+
+        Not deferred to the end of ``stream``: the pipeline stops iterating the
+        moment ``--max-products`` is hit, which suspends this generator forever,
+        so anything appended after the loop would never reach the report.
+        """
+        self.warnings = list(taxonomy.warnings)
+        if enricher.misses:
+            self.warnings.append(
+                f"{enricher.misses} product page(s) could not be read; "
+                "those rows have no category/subcategory."
+            )
 
     def _to_product(
         self, goods: dict[str, Any], seen_goods: set[int], skip: SkipPredicate | None
@@ -132,5 +181,8 @@ class BrowserProductSource(ProductSource):
                     except ScraperError as e:
                         self.stats.failed += 1
                         log.error("Failed to extract %s: %s", ref.product_url, e)
+                    # Refreshed per product for the same reason as the API source:
+                    # a capped run abandons this generator without resuming it.
+                    self.warnings = list(adapter.taxonomy.warnings)
                     if settings.request_delay_s > 0:
                         await asyncio.sleep(settings.request_delay_s)

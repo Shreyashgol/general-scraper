@@ -32,6 +32,7 @@ from savana_scraper.core.logging import get_logger
 from savana_scraper.models import Product, product_key
 from savana_scraper.services.adapter import ProductSource, SkipPredicate
 from savana_scraper.services.extractor import (
+    BreadcrumbStrategy,
     Extractor,
     FallbackStrategy,
     FieldSet,
@@ -246,7 +247,12 @@ class GenericProductSource(ProductSource):
         # savana.com and would be noise (or worse, wrong) on an unknown site.
         self._extractor = Extractor(
             settings,
-            strategies=[StructuredDataStrategy(), HeuristicStrategy(), FallbackStrategy()],
+            strategies=[
+                StructuredDataStrategy(),
+                BreadcrumbStrategy(),
+                HeuristicStrategy(),
+                FallbackStrategy(),
+            ],
         )
         #: Set during a run; surfaced to the API so the UI can show what happened.
         self.warnings: list[str] = []
@@ -558,6 +564,8 @@ class GenericProductSource(ProductSource):
                 product_url=url,
                 mrp=fields.mrp,
                 asp=fields.asp,
+                category=fields.category,
+                subcategory=fields.subcategory,
             )
         except (ValueError, ScraperError) as e:
             log.warning("Invalid product data for %s: %s", url, e)

@@ -5,10 +5,16 @@ validation converges on :class:`Product`.
 
 Field glossary (as defined by the PRD):
     * name        — Product Name
+    * category    — Broad group ("Bags"); may be absent on sites that expose none
+    * subcategory — Narrower group within it ("Backpacks"); likewise optional
     * image_url   — Image URL
     * mrp         — Maximum Retail Price (list / struck-through price)
     * asp         — Average Selling Price (the actual price paid)
     * product_url — Product Link
+
+Category and subcategory are deliberately *not* required. Plenty of storefronts
+publish no taxonomy at all, and a missing label is honest where an inferred one
+("Dress", because the title says so) would be a guess wearing a fact's clothes.
 """
 
 from __future__ import annotations
@@ -19,7 +25,15 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 # CSV column order — the single source of truth for the exporter and tests.
-CSV_FIELDS: tuple[str, ...] = ("name", "image_url", "mrp", "asp", "product_url")
+CSV_FIELDS: tuple[str, ...] = (
+    "name",
+    "category",
+    "subcategory",
+    "image_url",
+    "mrp",
+    "asp",
+    "product_url",
+)
 
 
 def product_key(url: str | HttpUrl) -> str:
@@ -58,6 +72,8 @@ class Product(BaseModel):
     product_url: HttpUrl
     mrp: Decimal | None = Field(default=None, ge=0)
     asp: Decimal | None = Field(default=None, ge=0)
+    category: str | None = None
+    subcategory: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -74,6 +90,8 @@ class Product(BaseModel):
         """Flatten to a CSV-ready string row following :data:`CSV_FIELDS`."""
         return {
             "name": self.name,
+            "category": self.category or "",
+            "subcategory": self.subcategory or "",
             "image_url": str(self.image_url),
             "mrp": "" if self.mrp is None else f"{self.mrp:.2f}",
             "asp": "" if self.asp is None else f"{self.asp:.2f}",
