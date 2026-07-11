@@ -552,7 +552,14 @@ class GenericProductSource(ProductSource):
         result = await self._fields(browser, page, url)
         if result is None:
             return None
-        fields, _ = result
+        return self._build_product(result[0], url)
+
+    def _build_product(self, fields: FieldSet, url: str) -> Product | None:
+        """Turn an extracted :class:`FieldSet` into a validated :class:`Product`.
+
+        Shared by the browser path (:meth:`_extract`) and the sitemap source's
+        fast HTTP path, so both apply the same completeness check and validation.
+        """
         if not fields.is_complete():
             log.warning("Skipping %s — missing required fields", url)
             return None

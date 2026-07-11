@@ -17,6 +17,7 @@ from savana_scraper.core.config import Settings
 from savana_scraper.core.logging import get_logger
 from savana_scraper.services.adapter import ProductSource
 from savana_scraper.services.generic_source import GenericProductSource
+from savana_scraper.services.sitemap_source import SitemapProductSource
 from savana_scraper.services.sources import ApiProductSource, BrowserProductSource
 
 log = get_logger(__name__)
@@ -27,6 +28,9 @@ SourceFactory = Callable[[Settings], ProductSource]
 #: so ``www.savana.com`` and ``savana.com`` both resolve to the Savana adapter.
 REGISTRY: dict[str, SourceFactory] = {
     "savana.com": ApiProductSource,
+    # Product and category pages are both bare ``/<slug>`` URLs, so shape-based
+    # clustering cannot tell them apart. The site's product sitemap can.
+    "beyoung.in": SitemapProductSource,
 }
 
 #: Named sources the caller can force via ``settings.source``, bypassing lookup.
@@ -34,6 +38,7 @@ EXPLICIT_SOURCES: dict[str, SourceFactory] = {
     "api": ApiProductSource,
     "browser": BrowserProductSource,
     "generic": GenericProductSource,
+    "sitemap": SitemapProductSource,
 }
 
 

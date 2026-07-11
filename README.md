@@ -25,6 +25,35 @@ So the platform keeps a **registry of site adapters** and falls back to a
 
 Adding a site = one entry in `services/registry.py`. Nothing else changes.
 
+### When URL shape can't tell products from categories
+
+Shape-based discovery has a blind spot: some storefronts serve a product and a
+category at the *same* URL shape. beyoung.in gives both a bare single-segment
+slug — `/black-jacquard-striped-t-shirt` (product) and `/t-shirts-for-men`
+(category) — so they collapse into one cluster, and a sample seeded from the
+homepage (which links mostly to categories) rejects the whole thing. The run ends
+with *"Found links, but no group of them parsed as product pages."*
+
+Such sites publish the answer themselves. `SitemapProductSource`
+(`services/sitemap_source.py`) walks the site's `robots.txt` → `sitemap.xml`
+tree, descends only the **product branch** — a nested sitemap whose loc names it
+products (`products.xml`, Shopify's `sitemap_products_1.xml`, Yoast's
+`product-sitemap.xml`), gzip shards included — and hands those exact URLs to the
+same extractor. It still samples a few and asks `is_product_page`, so a
+mislabelled or stale sitemap falls back to the shape crawler rather than exporting
+non-products. A site with no product-specific sitemap yields nothing and falls
+back too — it never treats an undifferentiated URL list as products.
+
+**Extraction takes the cheapest route that works.** Most storefronts render
+product data server-side, so the fast path is a plain **concurrent HTTP GET** — no
+browser, `_HTTP_CONCURRENCY` pages in flight at once — which turns the generic
+crawler's ~1 product/sec into a whole catalogue in seconds. Only when a sampled
+page fails to yield fields over raw HTTP (its data needs JavaScript) does it fall
+back to rendering each page in a browser. On beyoung.in the fast path holds: 40
+products in ~1s versus minutes to render them one by one.
+
+`beyoung.in` is registered to it; force it anywhere with `--source sitemap`.
+
 ### How the generic crawler avoids lying to you
 
 Picking the biggest group of same-shaped URLs is not enough: on savana.com's

@@ -50,7 +50,7 @@ def scrape(
     source: str = typer.Option(
         "auto",
         "--source",
-        help="'auto' (registry lookup), 'api', 'browser', or 'generic' (any site).",
+        help="'auto' (registry lookup), 'api', 'browser', 'generic' (any site), or 'sitemap'.",
     ),
     no_crawl: bool = typer.Option(
         False, "--no-crawl", help="Only scrape the seed URL, don't follow other listings."
