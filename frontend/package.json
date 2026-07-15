@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "engines": {
-    "node": "20.x",
+    "node": "24.x",
     "npm": "10.x"
   },
   "packageManager": "npm@10.8.2",
@@ -18,7 +18,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.0"
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.4"
   }
 }
