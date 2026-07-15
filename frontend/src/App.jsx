@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-// Empty in local dev so Vite can proxy /api; set VITE_API_BASE_URL in production.
-const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+const DEFAULT_API_BASE_URL = import.meta.env.PROD ? 'https://general-scraper.onrender.com' : ''
+// Empty in local dev so Vite can proxy /api; set VITE_API_BASE_URL to override.
+const API = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '')
 const POLL_MS = 1500
 
 const TERMINAL = ['done', 'error', 'blocked']

@@ -229,10 +229,10 @@ the API accept that frontend origin:
 
 ```bash
 # Vercel frontend
-VITE_API_BASE_URL=https://your-api-host.example.com
+VITE_API_BASE_URL=https://general-scraper.onrender.com
 
 # FastAPI backend
-SAVANA_CORS_ORIGINS=https://your-frontend.vercel.app
+SAVANA_CORS_ORIGINS=https://general-scraper-beta.vercel.app
 ```
 
 | Endpoint | |

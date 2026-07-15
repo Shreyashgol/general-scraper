@@ -141,7 +141,11 @@ class Settings(BaseSettings):
     # --- Web ------------------------------------------------------------------
     # Comma-separated in env, e.g.:
     # SAVANA_CORS_ORIGINS=https://frontend.vercel.app,https://preview.vercel.app
-    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://general-scraper-beta.vercel.app",
+    ]
 
     # --- Taxonomy -------------------------------------------------------------
     # Optional JSON file overriding/extending the savana category id → name map
