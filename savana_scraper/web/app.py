@@ -21,19 +21,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from savana_scraper import __version__
+from savana_scraper.core.config import load_settings
 from savana_scraper.core.logging import configure_logging
 from savana_scraper.web.jobs import MAX_PRODUCTS_LIMIT, JobStatus, JobStore
 
 configure_logging("INFO")
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+settings = load_settings()
 
 app = FastAPI(title="Scrape Platform", version=__version__)
 
 # The SPA is served from a different origin in development (Vite on :5173).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=settings.cors_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

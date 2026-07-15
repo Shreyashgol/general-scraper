@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Repository root (…/savana-scraper). Used to anchor default output/state dirs.
@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     # --- Logging --------------------------------------------------------------
     log_level: str = "INFO"
 
+    # --- Web ------------------------------------------------------------------
+    # Comma-separated in env, e.g.:
+    # SAVANA_CORS_ORIGINS=https://frontend.vercel.app,https://preview.vercel.app
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
     # --- Taxonomy -------------------------------------------------------------
     # Optional JSON file overriding/extending the savana category id → name map
     # (see services/taxonomy.py). Unmapped ids export as "cat:<id>".
@@ -148,6 +153,13 @@ class Settings(BaseSettings):
 
     # --- API ------------------------------------------------------------------
     api: ApiConfig = Field(default_factory=ApiConfig)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     @property
     def viewport(self) -> dict[str, int]:

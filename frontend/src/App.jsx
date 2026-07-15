@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-// Served from the API host in production; proxied by Vite in dev.
-const API = ''
+// Empty in local dev so Vite can proxy /api; set VITE_API_BASE_URL in production.
+const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 const POLL_MS = 1500
 
 const TERMINAL = ['done', 'error', 'blocked']

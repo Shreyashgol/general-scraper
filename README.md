@@ -224,6 +224,17 @@ uvicorn savana_scraper.web.app:app --reload      # → http://localhost:8000
 For frontend development with hot reload, run the API on `:8000` and, in another
 terminal, `cd frontend && npm run dev` (Vite proxies `/api` to it).
 
+For a split production deploy, point the static frontend at the API host and let
+the API accept that frontend origin:
+
+```bash
+# Vercel frontend
+VITE_API_BASE_URL=https://your-api-host.example.com
+
+# FastAPI backend
+SAVANA_CORS_ORIGINS=https://your-frontend.vercel.app
+```
+
 | Endpoint | |
 | --- | --- |
 | `POST /api/jobs` | `{url, max_products, ignore_robots}` → job, immediately |
